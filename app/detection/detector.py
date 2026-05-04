@@ -6,6 +6,7 @@ class TorchDetector:
     def __init__(self, model_path="models/best.pt", use_gpu=False):
         self.device = 'cuda' if use_gpu and torch.cuda.is_available() else 'cpu'
         self.model = YOLO(model_path)
+        self.class_names = list(self.model.names.values())
         self.model.to(self.device)
 
     def detect(self, frame: np.ndarray) -> list:
@@ -24,3 +25,4 @@ class TorchDetector:
                 "confidence": conf
             })
         return detections
+
