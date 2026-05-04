@@ -1,64 +1,36 @@
 import asyncio
 import os
+import shutil
 import tempfile
 import cv2
+import numpy as np
 from fastapi import APIRouter, UploadFile, File, Depends
-import app.detection.singleton as detector_singleton
-from sqlalchemy.ext.asyncio import AsyncSession
-from app.api.dependencies import get_db
 from fastapi.responses import FileResponse
-import shutil
+from app.detection import singleton as detector_singleton
+from app.api.dependencies import get_db
+from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter()
 
+CLASS_COLORS = {
+    'Hardhat': (0, 0, 255),
+    'Mask': (0, 255, 0),
+    'NO-Hardhat': (255, 0, 0),
+    'NO-Mask': (0, 255, 255),
+    'NO-Safety Vest': (255, 255, 0),
+    'Person': (255, 0, 255),
+    'Safety Cone': (0, 165, 255),
+    'Safety Vest': (128, 0, 128),
+    'machinery': (128, 128, 0),
+    'vehicle': (203, 192, 255),
+}
+DEFAULT_COLOR = (255, 255, 255)
+
+
 def process_frame(detector, frame):
-    """Синхронная функция для детекции на одном кадре (вызывается в потоке)."""
+    """Синхронная функция для детекции на одном кадре."""
     return detector.detect(frame)
 
-async def process_video_async(file_path: str, detector):
-    """Асинхронная обёртка для обработки видеофайла без блокировки event loop."""
-    loop = asyncio.get_running_loop()
-    cap = cv2.VideoCapture(file_path)
-    results = []
-    frame_id = 0
-    try:
-        while cap.isOpened():
-            ret, frame = cap.read()
-            if not ret:
-                break
-            detections = await loop.run_in_executor(None, process_frame, detector, frame)
-            if detections:
-                results.append({
-                    "frame": frame_id,
-                    "detections": detections
-                })
-            frame_id += 1
-            await asyncio.sleep(0)
-    finally:
-        cap.release()
-    return results
-
-@router.post("/upload-video/")
-async def upload_video(file: UploadFile = File(...), db: AsyncSession = Depends(get_db)):
-    """Принимает видеофайл, обрабатывает его моделью YOLOv8-P2 и возвращает найденные объекты."""
-    detector = detector_singleton.detector_instance
-    if detector is None:
-        return {"error": "Модель детекции не загружена"}
-    temp_dir = tempfile.mkdtemp()
-    temp_path = os.path.join(temp_dir, file.filename)
-    with open(temp_path, "wb") as buffer:
-        buffer.write(await file.read())
-
-    try:
-        results = await process_video_async(temp_path, detector)
-        return {
-            "filename": file.filename,
-            "frames_processed": len(results),
-            "detections": results
-        }
-    finally:
-        os.remove(temp_path)
-        os.rmdir(temp_dir)
 
 @router.post("/upload-video-visualize/")
 async def upload_video_visualize(file: UploadFile = File(...)):
@@ -88,18 +60,18 @@ async def upload_video_visualize(file: UploadFile = File(...)):
             break
         detections = detector.detect(frame)
         for d in detections:
-            x1, y1, x2, y2 = d["bbox"]
             cls_name = d["class_name"]
+            x1, y1, x2, y2 = d["bbox"]
             conf = d["confidence"]
-            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            color = CLASS_COLORS.get(cls_name, DEFAULT_COLOR)
+            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
             label = f"{cls_name} {conf:.2f}"
-            cv2.putText(frame, label, (x1, y1-5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,255,0), 1)
+            cv2.putText(frame, label, (x1, y1-5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
         out.write(frame)
 
     cap.release()
     out.release()
 
-    # очистка временной папки
     async def cleanup_async(path):
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, lambda: shutil.rmtree(path, ignore_errors=True))
@@ -110,3 +82,76 @@ async def upload_video_visualize(file: UploadFile = File(...)):
         filename="output.avi",
         background=lambda: cleanup_async(temp_dir)
     )
+
+@router.post("/upload-video-report/")
+async def upload_video_report(file: UploadFile = File(...), detailed: bool = False, db: AsyncSession = Depends(get_db)):
+    """Принимает видео и возвращает JSON-отчёт о присутствии СИЗ и возможных нарушениях."""
+    detector = detector_singleton.detector_instance
+    if detector is None:
+        return {"error": "Модель не загружена"}
+
+    temp_dir = tempfile.mkdtemp()
+    input_path = os.path.join(temp_dir, file.filename)
+    with open(input_path, "wb") as f:
+        f.write(await file.read())
+
+    cap = cv2.VideoCapture(input_path)
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    duration = total_frames / fps if fps > 0 else None
+
+    class_occurrences = {name: 0 for name in detector.class_names}
+    violations = []
+    frame_details = [] if detailed else None
+
+    frame_id = 0
+    while cap.isOpened():
+        ret, frame = cap.read()
+        if not ret:
+            break
+        detections = detector.detect(frame)
+        current_classes = set()
+        frame_info = {"frame": frame_id, "detections": detections}
+
+        for d in detections:
+            cls_name = d["class_name"]
+            class_occurrences[cls_name] += 1
+            current_classes.add(cls_name)
+
+        negative_classes = [cls for cls in current_classes if cls.startswith("NO-")]
+        if negative_classes:
+            violations.append({
+                "frame": frame_id,
+                "timestamp_sec": frame_id / fps if fps else None,
+                "violations": negative_classes
+            })
+
+        if detailed:
+            frame_details.append(frame_info)
+
+        frame_id += 1
+
+    cap.release()
+    shutil.rmtree(temp_dir, ignore_errors=True)
+
+    summary = []
+    for name, count in class_occurrences.items():
+        present = "yes" if count > 0 else "no"
+        summary.append({
+            "class": name,
+            "detected_count": count,
+            "presence": present,
+            "is_violation": name.startswith("NO-") and count > 0
+        })
+
+    report = {
+        "source": file.filename,
+        "duration_seconds": duration,
+        "frames_processed": frame_id,
+        "summary": summary,
+        "violations": violations,
+    }
+    if detailed:
+        report["frame_details"] = frame_details
+
+    return report
