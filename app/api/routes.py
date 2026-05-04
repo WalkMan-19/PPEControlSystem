@@ -3,29 +3,14 @@ import os
 import shutil
 import tempfile
 import cv2
-import numpy as np
 from fastapi import APIRouter, UploadFile, File, Depends
 from fastapi.responses import FileResponse
 from app.detection import singleton as detector_singleton
 from app.api.dependencies import get_db
+from app.detection.config import CLASS_COLORS
 from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter()
-
-CLASS_COLORS = {
-    'Hardhat': (0, 0, 255),
-    'Mask': (0, 255, 0),
-    'NO-Hardhat': (255, 0, 0),
-    'NO-Mask': (0, 255, 255),
-    'NO-Safety Vest': (255, 255, 0),
-    'Person': (255, 0, 255),
-    'Safety Cone': (0, 165, 255),
-    'Safety Vest': (128, 0, 128),
-    'machinery': (128, 128, 0),
-    'vehicle': (203, 192, 255),
-}
-DEFAULT_COLOR = (255, 255, 255)
-
 
 def process_frame(detector, frame):
     """Синхронная функция для детекции на одном кадре."""

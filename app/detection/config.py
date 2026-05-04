@@ -33,3 +33,16 @@ DATABASE_URL = "postgresql+asyncpg://{}:{}@{}:{}/{}".format(
     DATABASE['USER'], DATABASE['PASSWORD'], DATABASE['HOST'], DATABASE['PORT'], DATABASE['NAME']
 )
 
+CLASS_COLORS = {
+    'Hardhat': (0, 0, 255),
+    'Mask': (0, 255, 0),
+    'NO-Hardhat': (255, 0, 0),
+    'NO-Mask': (0, 255, 255),
+    'NO-Safety Vest': (255, 255, 0),
+    'Person': (255, 0, 255),
+    'Safety Cone': (0, 165, 255),
+    'Safety Vest': (128, 0, 128),
+    'machinery': (128, 128, 0),
+    'vehicle': (203, 192, 255),
+}
+DEFAULT_COLOR = (255, 255, 255)
