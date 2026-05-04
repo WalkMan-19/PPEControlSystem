@@ -7,7 +7,7 @@ from fastapi import APIRouter, UploadFile, File, Depends
 from fastapi.responses import FileResponse
 from app.detection import singleton as detector_singleton
 from app.api.dependencies import get_db
-from app.detection.config import CLASS_COLORS
+from app.detection.config import CLASS_COLORS, DEFAULT_COLOR
 from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter()
